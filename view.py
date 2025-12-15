@@ -778,6 +778,79 @@ def cadastrar_produto():
         cur.close()
 
 
+@app.route("/produtos/editar/<int:id_produto>", methods=["PUT"])
+def editar_produto(id_produto):
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+
+    data = request.get_json()
+    nome = data.get("nome")
+    codigo = data.get("codigo")
+    qtd = data.get("qtd")
+    preco = data.get("preco")
+    codigo = str(codigo) if codigo else None
+
+    if codigo:
+        if len(codigo) != 13:
+            return jsonify({"message": """Código de barras inválido""", "error": True}), 401
+
+    cur = con.cursor()
+    try:
+        # Verificações de duplicatas
+        cur.execute("SELECT 1 FROM PRODUTOS WHERE CODIGO_BARRAS = ? AND ID_PRODUTO <> ?", (codigo, id_produto,))
+        resposta = cur.fetchone()
+        if resposta:
+            return jsonify({"message": "Um outro produto já está usando esse código de barras", "error": True}), 401
+
+        # Pegando valores padrões
+        cur.execute("""SELECT NOME, CODIGO_BARRAS, QUANTIDADE, PRECO FROM PRODUTOS WHERE ID_PRODUTO = ?""", (id_produto,))
+        resposta = cur.fetchone()
+        if resposta:
+            # Trocando os valores não recebidos pelos existentes no banco
+            nome = resposta[0] if not nome else nome
+            codigo = resposta[1] if not codigo else codigo
+            qtd = resposta[2] if not qtd else qtd
+            preco = resposta[3] if not preco else preco
+
+        cur.execute("""UPDATE PRODUTOS SET NOME = ?, CODIGO_BARRAS = ?, QUANTIDADE = ?, PRECO = ? 
+         WHERE ID_PRODUTO = ?""",
+                    (nome, codigo, qtd, preco, id_produto, ))
+
+        con.commit()
+
+        return jsonify({"message": "Produto editado com sucesso!", "error": "False"}), 200
+
+    except Exception as e:
+        print("Erro ao editar produto", e)
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/produtos/excluir/<int:id_produto>", methods=["DELETE"])
+def excluir_produto(id_produto):
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT 1 FROM PRODUTOS WHERE ID_PRODUTO = ?", (id_produto,))
+        resposta = cur.fetchone()
+        if not resposta:
+            return jsonify({"message": "Produto não encontrado"}), 404
+
+        cur.execute("DELETE FROM PRODUTOS WHERE ID_PRODUTO = ?", (id_produto,))
+        con.commit()
+        return jsonify({"message": "Produto excluído com sucesso!"}), 200
+    except Exception as e:
+        print("Erro ao excluir produto")
+        raise
+    finally:
+        cur.close()
+
+
 @app.route("/produtos/<int:pagina>", methods=["GET"])
 def trazer_produtos(pagina):
     verificacao = informar_verificacao()
@@ -800,10 +873,138 @@ def trazer_produtos(pagina):
         inicial = pagina * 8 - 7 if pagina == 1 else pagina * 8 - 7
         final = pagina * 8
 
-        cur.execute("SELECT * FROM PRODUTOS")
+        cur.execute(f"SELECT * FROM PRODUTOS ROWS {inicial} to {final}")
+        produtos = cur.fetchall()
+        return jsonify({"produtos": produtos})
 
     except Exception as e:
         print("erro ao listar produtos")
         raise
     finally:
         cur.close()
+
+
+#@app.route("/produtos/<int:id_produto>")
+
+
+@app.route("/movimentacoes/criar/<int:id_usuario>", methods=["POST"])
+def criar_movimentacoes(id_usuario):
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+    data = request.get_json()
+    ids_produtos = data.get("produtos")
+
+    cur = con.cursor()
+    try:
+        # Verificar se o produto e o usuário existem
+        cur.execute("SELECT 1 FROM USUARIOS WHERE ID_USUARIO = ?", (id_usuario, ))
+        resposta = cur.fetchone()
+        if not resposta:
+            return jsonify({"message": "Usuário não encontrado"}), 404
+
+        estoques = {} # Estoque novo
+        # estoques_banco = {}
+        for id_prod in ids_produtos:
+            cur.execute("SELECT QUANTIDADE FROM PRODUTOS WHERE ID_PRODUTO = ?", (id_prod, ))
+            resposta = cur.fetchone()
+            if not resposta:
+                return jsonify({"message": f"Produto não encontrado (ID {id_prod})"}), 404
+            else:
+                if str(id_prod) in estoques:
+                    estoques[str(id_prod)] -= 1
+                else:
+                    estoques[str(id_prod)] = resposta[0] - 1
+                # estoques_banco[str(id_prod)] = resposta[0]
+
+        cur.execute("INSERT INTO MOVIMENTACOES (ID_USUARIO) VALUES (?) RETURNING ID_MOVIMENTACAO",(id_usuario, ))
+        id_mov = cur.fetchone()
+        id_mov = id_mov[0]
+
+        for id_prod, estoque in estoques.items():
+            nova_qtd = estoque
+            if nova_qtd < 0:
+                return jsonify({"message": "Um dos produtos escolhidos possui estoque insuficiente"}), 401
+
+            # Alterar o estoque de cada produto
+            cur.execute("UPDATE PRODUTOS SET QUANTIDADE = ? WHERE ID_PRODUTO = ?", (nova_qtd, int(id_prod),))
+
+        for id_prod in ids_produtos:
+            # Adiciona cada ID_PRODUTO à movimentação por GRUPO_PRODUTOS
+            cur.execute("INSERT INTO GRUPOS_PRODUTOS (ID_MOVIMENTACAO, ID_PRODUTO) VALUES (?,?)",
+                        (id_mov, id_prod))
+
+        con.commit()
+        return jsonify({"message": "Movimentação registrada com sucesso!"})
+
+    except Exception as e:
+        print("Erro ao criar movimentação")
+        raise
+    finally:
+        cur.close()
+
+@app.route("/movimentacoes/<int:pagina>", methods=["GET"])
+def trazer_movimentacoes(pagina):
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+
+    cur = con.cursor()
+    try:
+        if pagina == 0:
+            cur.execute("SELECT COUNT(ID_MOVIMENTACAO) FROM MOVIMENTACOES")
+            qtd_paginas = cur.fetchone()
+            qtd_paginas = qtd_paginas[0]
+            # print(qtd_paginas, qtd_paginas/8, qtd_paginas % 8 != 0, qtd_paginas // 8 + 1)
+            if qtd_paginas % 8 != 0:  # Se tem resto adiciona um
+                qtd_paginas = (qtd_paginas // 8) + 1
+            else:
+                qtd_paginas = qtd_paginas / 8
+
+            return jsonify({"paginas": int(qtd_paginas)})
+        inicial = pagina * 8 - 7 if pagina == 1 else pagina * 8 - 7
+        final = pagina * 8
+
+        cur.execute(f"""SELECT ID_MOVIMENTACAO, ID_USUARIO, DATA_MOVIMENTACAO FROM MOVIMENTACOES
+        ORDER BY DATA_MOVIMENTACAO DESC
+         ROWS {inicial} to {final}""")
+        colunas = ["id_mob", "id_user", "data_mov"]
+        linhas = cur.fetchall()
+
+        dicionario = [dict(zip(colunas, linha)) for linha in linhas]
+
+        return jsonify({"movimentacoes": dicionario})
+    except Exception:
+        print("Erro ao trazer movimentações")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/movimentacoes/excluir/<int:id_movimentacao>", methods=["DELETE"])
+def excluir_movimentacao(id_movimentacao):
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT 1 FROM MOVIMENTACOES WHERE ID_MOVIMENTACAO = ?", (id_movimentacao,))
+        resposta = cur.fetchone()
+        if not resposta:
+            return jsonify({"message": "Movimentação não encontrada"}), 404
+
+        cur.execute("DELETE FROM GRUPOS_PRODUTOS WHERE ID_MOVIMENTACAO = ?", (id_movimentacao, ))
+        cur.execute("DELETE FROM MOVIMENTACOES WHERE ID_MOVIMENTACAO = ?", (id_movimentacao,))
+        con.commit()
+
+        return jsonify({"message": "Movimentação excluída com sucesso"}), 200
+
+    except Exception:
+        print("erro ao excluir movimentação")
+    finally:
+        cur.close()
+
+
+#@app.route("/movimentacoes/editar/<int:id_usuario>", methods=["PUT"])
+#def editar_movimentacao
