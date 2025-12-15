@@ -14,7 +14,7 @@ senha_secreta = app.config['SECRET_KEY']
 def generate_token(user_id):
     expires = datetime.timedelta(hours=3)
     additional_claims = {"id_usuario": str(user_id)}
-    token = create_access_token(identity=user_id, additional_claims=additional_claims, expires_delta=expires)
+    token = create_access_token(identity=str(user_id), additional_claims=additional_claims, expires_delta=expires)
     return token
 
 
@@ -75,7 +75,7 @@ def verificar_user(tipo, trazer_pl):
             return 3
 
         # pega identity e claims
-        id_logado = get_jwt_identity()
+        id_logado = int(get_jwt_identity())
         claims = get_jwt()  # dicionário com additional_claims
 
         # Se você precisa do payload completo (similar ao antigo), construa-o:
@@ -87,7 +87,7 @@ def verificar_user(tipo, trazer_pl):
             cur.execute("SELECT 1 FROM USUARIOS WHERE ID_USUARIO = ? AND (TIPO = 2 OR TIPO = 3)", (id_logado,))
             biblio = cur.fetchone()
             if not biblio:
-                return 4  # Nível Personal trainer requerido
+                return 4  # Nível 2
 
         elif tipo == 3:
             cur.execute("SELECT 1 FROM USUARIOS WHERE ID_USUARIO = ? AND TIPO = 3", (id_logado,))
@@ -114,7 +114,7 @@ def informar_verificacao(tipo=0, trazer_pl=False):
     elif verificacao == 3:
         return jsonify({'message': 'Token inválido.', "verificacao": verificacao, "error": True}), 401
     elif verificacao == 4:
-        return jsonify({'message': 'Nível Personal Trainer requerido.', "verificacao": verificacao, "error": True}), 401
+        return jsonify({'message': 'Nível Farmacêutico requerido.', "verificacao": verificacao, "error": True}), 401
     elif verificacao == 5:
         return jsonify({'message': 'Nível Administrador requerido.', "verificacao": verificacao, "error": True}), 401
     elif verificacao == 6:
@@ -234,6 +234,18 @@ def cadastrar_usuario(tipo=1):
     cpf1 = str(cpf)
     tel1 = str(tel)
 
+    if nome:
+        if len(nome) > 895:
+            return jsonify({"message": "Nome grande demais, o limite é 895 caracteres", "error": True}), 401
+    if cpf:
+        if len(cpf1) != 11:
+            return jsonify({"message": "O CPF precisa ter 11 dígitos", "error": True}), 401
+    if tel:
+        if len(tel1) != 13:
+            return jsonify({"message": """O telefone precisa ser enviado em 13 dígitos exemplo: +55 (18) 12345-1234 = 5518123451234""", "error": True}), 401
+    if '@' not in email:
+        return jsonify({"message": "E-mail inválido", "error": True}), 401
+
     # Verificações de senha
     if len(senha1) < 8:
         return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres, 
@@ -303,6 +315,495 @@ def cadastrar_usuario(tipo=1):
 
     except Exception as e:
         print(f"Erro em cadastrarusuario, {e}")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/usuarios/editar", methods=["PUT"])
+def editar_perfil():
+    verificacao = informar_verificacao()
+    if verificacao:
+        return verificacao
+    id_usuario = informar_verificacao(trazer_pl=True)
+    id_usuario = id_usuario['id_usuario']
+
+    data = request.get_json()
+    nome = data.get("nome")
+    senha1 = data.get("senha")
+    cpf = data.get("cpf")
+    email = data.get("email")
+    email = email.lower()
+    tel = data.get("tel")
+
+    # Verificações de comprimento e formatação de dados
+    cpf1 = str(cpf)
+    tel1 = str(tel)
+
+    if nome:
+        if len(nome) > 895:
+            return jsonify({"message": "Nome grande demais, o limite é 895 caracteres", "error": True}), 401
+    if cpf:
+        if len(cpf1) != 11:
+            return jsonify({"message": "O CPF precisa ter 11 dígitos", "error": True}), 401
+    if tel:
+        if len(tel1) != 13:
+            return jsonify({"message": """O telefone precisa ser enviado em 13 dígitos exemplo: +55 (18) 12345-1234 = 5518123451234""", "error": True}), 401
+    if '@' not in email:
+        return jsonify({"message": "E-mail inválido", "error": True}), 401
+
+    # Verificações de senha
+
+    if len(senha1) < 8:
+        return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+            uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+
+    tem_maiuscula = False
+    tem_minuscula = False
+    tem_numero = False
+    tem_caract_especial = False
+    caracteres_especiais = "!@#$%^&*(),-.?\":{}|<>"
+
+    # Verifica cada caractere da senha
+    for char in senha1:
+        if char.isupper():
+            tem_maiuscula = True
+        elif char.islower():
+            tem_minuscula = True
+        elif char.isdigit():
+            tem_numero = True
+        elif char in caracteres_especiais:
+            tem_caract_especial = True
+
+    # Verifica se todos os critérios foram atendidos
+    if not tem_maiuscula:
+        return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+            uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+    if not tem_minuscula:
+        return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+            uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+    if not tem_numero:
+        return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+            uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+    if not tem_caract_especial:
+        return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+            uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+
+    cur = con.cursor()
+    try:
+        # Verificações de duplicatas
+        cur.execute("SELECT CPF FROM USUARIOS WHERE CPF = ? AND ID_USUARIO <> ?", (cpf1, id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == cpf1:
+                return jsonify({"message": "CPF já cadastrado", "error": True}), 401
+
+        cur.execute("SELECT EMAIL FROM USUARIOS WHERE EMAIL = ? AND ID_USUARIO <> ?", (email, id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == email:
+                return jsonify({"message": "Email já cadastrado", "error": True}), 401
+
+        cur.execute("SELECT TELEFONE FROM USUARIOS WHERE TELEFONE = ? AND ID_USUARIO <> ?", (formatar_telefone(tel1), id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == formatar_telefone(tel1):
+                return jsonify({"message": "Telefone já cadastrado", "error": True}), 401
+
+        # Pegando valores padrões
+        cur.execute("""SELECT NOME, SENHA, CPF, EMAIL, TELEFONE FROM USUARIOS WHERE ID_USUARIO = ?""", (id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            # Trocando os valores não recebidos pelos existentes no banco
+            nome = resposta[0] if not nome else nome
+            senha_hash = resposta[1]
+            cpf1 = str(resposta[2]) if not cpf else cpf1
+            email = resposta[3] if not email else email
+            tel = resposta[4] if not tel else tel
+
+        if senha1:
+            senha_hash = generate_password_hash(senha1).decode('utf-8')
+
+        cur.execute("""UPDATE USUARIOS SET NOME = ?, SENHA = ?, CPF = ?, EMAIL = ?, TELEFONE = ?, 
+         WHERE ID_USUARIO = ?""", (nome, senha_hash, cpf1, email, formatar_telefone(tel),
+                                                    id_usuario,))
+
+        con.commit()
+
+        return jsonify({"message": "Usuário editado com sucesso!", "error": "False"}), 200
+
+    except Exception:
+        print("Erro em /usuarios/editar")
+        raise
+    finally:
+        cur.close()
+
+
+# Entrega os campos de dados já existentes para o usuário se editar
+@app.route('/usuarios/info', methods=["GET"])
+def trazer_campos_editar_a_si_mesmo():
+    verificacao = informar_verificacao()
+    if verificacao:
+        return verificacao
+
+    id_logado = informar_verificacao(trazer_pl=True)
+    id_logado = id_logado["id_usuario"]
+
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT TIPO FROM USUARIOS WHERE ID_USUARIO = ?", (id_logado, ))
+        dicionario = {}
+        subtitulos = []
+
+        tipo = cur.fetchone()
+        if tipo:
+            cur.execute(f"""SELECT NOME, EMAIL, TELEFONE, CPF, ATIVO
+                            FROM USUARIOS WHERE ID_USUARIO = ?""", (id_logado,))
+            subtitulos = ["nome", "email", "telefone", "cpf", "data_nascimento", "ativo"]
+            dados = cur.fetchone()
+            x = 0
+            for dado in dados:
+                try:
+                    dicionario[subtitulos[x]] = dado
+                except IndexError:
+                    return jsonify({"message": "Erro ao recuperar campos de dado do usuário", "error": True}), 500
+                x += 1
+            # dados_json = dict(zip(subtitulos, dados))
+
+            return jsonify({"dados": dicionario, "error": False}), 200
+
+    except Exception:
+        print("Erro em /usuarios/info")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/usuarios/<int:tipo_logado>/<int:pagina>/<int:tipo_listar>", methods=["GET"])
+def listar_usuarios(tipo_logado, pagina=1, tipo_listar=1):  # Se a página for 0, retornar o total de páginas disponíveis
+    # Lista todos os usuários e suas informações conforme as permissões de quem está logado
+    if tipo_logado > 2:
+        verificacao = informar_verificacao(3)
+        if verificacao:
+            return verificacao
+    else:
+        verificacao = informar_verificacao(2)
+        if verificacao:
+            return verificacao
+
+    tipo_listar = 3 if tipo_listar > 3 else tipo_listar
+    tipo_listar = 1 if tipo_listar < 1 else tipo_listar
+    cur = con.cursor()
+    try:
+        if pagina == 0:
+            cur.execute("SELECT COUNT(ID_USUARIO) FROM USUARIOS WHERE TIPO = ?", (tipo_listar, ))
+            qtd_paginas = cur.fetchone()
+            qtd_paginas = qtd_paginas[0]
+            # print(qtd_paginas, qtd_paginas/8, qtd_paginas % 8 != 0, qtd_paginas // 8 + 1)
+            if qtd_paginas % 8 != 0:  # Se tem resto adiciona um
+                qtd_paginas = (qtd_paginas // 8) + 1
+            else:
+                qtd_paginas = qtd_paginas / 8
+
+            return jsonify({"paginas": int(qtd_paginas)})
+        inicial = pagina * 8 - 7 if pagina == 1 else pagina * 8 - 7
+        final = pagina * 8
+        if tipo_listar == 3:
+            if tipo_logado < 3:
+                return jsonify({"message": "Você não tem permissão para ver esse tipo de usuário.", "error": True}), 401
+
+        cur.execute(f"""SELECT ID_USUARIO, NOME, EMAIL, TELEFONE, ATIVO FROM USUARIOS 
+                        WHERE TIPO = ? ORDER BY ID_USUARIO DESC ROWS {inicial} TO {final}""", (tipo_listar, ))
+        usuarios = cur.fetchall()
+        # [inicial - 1:final]
+        return jsonify({"usuarios": usuarios, "error": False}), 200
+    except Exception:
+        print("Erro em /usuarios/admin/<int:pagina>/<int:tipo>")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/usuarios/info/<int:id_usuario>/<int:tipo_logado>", methods=["GET"])
+def trazer_campos_editar_outro(id_usuario, tipo_logado):
+    if tipo_logado > 2:
+        verificacao = informar_verificacao(3)
+        if verificacao:
+            return verificacao
+    else:
+        verificacao = informar_verificacao(2)
+        if verificacao:
+            return verificacao
+
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT TIPO FROM USUARIOS WHERE ID_USUARIO = ?", (id_usuario,))
+        resposta = cur.fetchone()
+        subtitulos = []
+        dicionario = {}
+        if resposta:
+            tipo = resposta[0]
+            if tipo == 2:
+                if tipo_logado < 3:
+                    return jsonify({"message": "Você não tem permissão de ver os dados desse usuário",
+                                    "error": True}), 401
+
+            cur.execute("""SELECT NOME, ATIVO, CPF, EMAIL, TELEFONE
+             FROM USUARIOS WHERE ID_USUARIO = ?""", (id_usuario,))
+            subtitulos = ["nome", "ativo", "cpf", "email", "telefone"]
+        else:
+            return jsonify({"message": "Usuário não encontrado", "error": True}), 404
+
+        dados = cur.fetchone()
+        x = 0
+        for dado in dados:
+            try:
+                dicionario[subtitulos[x]] = dado
+            except IndexError:
+                return jsonify({"message": "Erro ao recuperar campos de dado do usuário", "error": True}), 500
+            x += 1
+        # dados_json = dict(zip(subtitulos, dados))
+
+        return jsonify({"dados": dicionario, "error": False}), 200
+    except Exception:
+        print("Erro em /usuarios/info/<int:id_usuario>/<int:tipo_logado>")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/usuarios/<int:id_usuario>/editar/<int:tipo_logado>", methods=["PUT"])
+def editar_outro_usuario(id_usuario, tipo_logado):
+    if tipo_logado > 2:
+        verificacao = informar_verificacao(3)
+        if verificacao:
+            return verificacao
+    else:
+        verificacao = informar_verificacao(2)
+        if verificacao:
+            return verificacao
+
+    data = request.get_json()
+    nome = data.get("nome")
+    senha1 = data.get("senha")
+    cpf = data.get("cpf")
+    email = data.get("email")
+    if email:
+        email = email.lower()
+    tel = data.get("telefone")
+
+    # Verificações de comprimento e formatação de dados
+    cpf1 = str(cpf) if cpf else None
+    tel1 = str(tel) if tel else None
+
+    if nome:
+        if len(nome) > 895:
+            return jsonify({"message": "Nome grande demais, o limite é 895 caracteres", "error": True}), 401
+    if cpf:
+        if len(cpf1) != 11:
+            return jsonify({"message": "O CPF precisa ter 11 dígitos", "error": True}), 401
+    if tel:
+        if len(tel1) != 13:
+            return jsonify({"message": """O telefone precisa ser enviado em 13 dígitos exemplo: +55 (18) 12345-1234 = 5518123451234""", "error": True}), 401
+    if email:
+        if '@' not in email:
+            return jsonify({"message": "E-mail inválido", "error": True}), 401
+
+    # Verificações de senha, se houver senha
+    if senha1:
+        if len(senha1) < 8:
+            return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+                    uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+
+        tem_maiuscula = False
+        tem_minuscula = False
+        tem_numero = False
+        tem_caract_especial = False
+        caracteres_especiais = "!@#$%^&*(),-.?\":{}|<>"
+
+        # Verifica cada caractere da senha
+        for char in senha1:
+            if char.isupper():
+                tem_maiuscula = True
+            elif char.islower():
+                tem_minuscula = True
+            elif char.isdigit():
+                tem_numero = True
+            elif char in caracteres_especiais:
+                tem_caract_especial = True
+
+        # Verifica se todos os critérios foram atendidos
+        if not tem_maiuscula:
+            return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+                    uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+        if not tem_minuscula:
+            return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+                    uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+        if not tem_numero:
+            return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+                    uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+        if not tem_caract_especial:
+            return jsonify({"message": """Sua senha deve conter pelo menos oito caracteres,
+                    uma letra maiúscula e minúscula e um símbolo de seu teclado.""", "error": True}), 401
+
+    cur = con.cursor()
+    try:
+        # Verificações de duplicatas
+        cur.execute("SELECT CPF FROM USUARIOS WHERE CPF = ? AND ID_USUARIO <> ?", (cpf1, id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == cpf1:
+                return jsonify({"message": "CPF já cadastrado", "error": True}), 401
+
+        cur.execute("SELECT EMAIL FROM USUARIOS WHERE EMAIL = ? AND ID_USUARIO <> ?", (email, id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == email:
+                return jsonify({"message": "Email já cadastrado", "error": True}), 401
+
+        cur.execute("SELECT TELEFONE FROM USUARIOS WHERE TELEFONE = ? AND ID_USUARIO <> ?", (formatar_telefone(tel1), id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            if resposta[0] == formatar_telefone(tel1):
+                return jsonify({"message": "Telefone já cadastrado", "error": True}), 401
+
+        # Pegando valores padrões
+        cur.execute("""SELECT NOME, SENHA, CPF, EMAIL, TELEFONE, TIPO FROM USUARIOS WHERE ID_USUARIO = ?""", (id_usuario,))
+        resposta = cur.fetchone()
+        if resposta:
+            # Trocando os valores não recebidos pelos existentes no banco
+            nome = resposta[0] if not nome else nome
+            senha_hash = resposta[1]
+            cpf1 = str(resposta[2]) if not cpf else cpf1
+            email = resposta[3] if not email else email
+            tel1 = str(resposta[4]) if not tel else tel1
+
+        if senha1:
+            senha_hash = generate_password_hash(senha1).decode('utf-8')
+
+        cur.execute("""UPDATE USUARIOS SET NOME = ?, SENHA = ?, CPF = ?, EMAIL = ?, TELEFONE = ? 
+         WHERE ID_USUARIO = ?""",
+                    (nome, senha_hash, cpf1, email, formatar_telefone(tel1), id_usuario,))
+
+        con.commit()
+
+        return jsonify({"message": "Usuário editado com sucesso!", "error": "False"}), 200
+
+    except Exception:
+        print("Erro em /usuarios/<int:id_usuario>/editar/<int:tipo_logado>")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/usuarios/<int:id_usuario>/alternar-ativo", methods=["GET"])
+def alternar_ativo_de_usuario(id_usuario):
+
+    cur = con.cursor()
+    try:
+        # Verificar o id_usuario
+        cur.execute("SELECT TIPO, ATIVO FROM USUARIOS WHERE ID_USUARIO = ?", (id_usuario, ))
+        resultado = cur.fetchone()
+        if not resultado:
+            return jsonify({"message": "Usuário não encontrado", "error": True}), 404
+        if resultado[0] > 1:
+            verificacao = informar_verificacao(3)
+            if verificacao:
+                return verificacao
+            if resultado[0] == 3:
+                return jsonify({"message": "Esse usuário não pode ser inativado"})
+        else:
+            verificacao = informar_verificacao(2)
+            if verificacao:
+                return verificacao
+
+        if resultado[1]:  # Se ativo == True
+            cur.execute("UPDATE USUARIOS SET ATIVO = FALSE WHERE ID_USUARIO = ?", (id_usuario, ))
+            con.commit()
+            return jsonify({"message": "Usuário inativado com sucesso!", "error": False})
+        else:  # Se resultado != True
+            cur.execute("UPDATE USUARIOS SET ATIVO = TRUE WHERE ID_USUARIO = ?", (id_usuario,))
+            con.commit()
+            return jsonify({"message": "Usuário reativado com sucesso!", "error": False})
+    except Exception:
+        print("erro em /usuarios/<int:id_usuario>/alternar-ativo")
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/produtos/cadastrar", methods=["POST"])
+def cadastrar_produto():
+    verificacao = informar_verificacao(2)
+    if verificacao:
+        return verificacao
+
+    data = request.get_json()
+    nome = data.get("nome")
+    cod_bar = data.get("codigo")
+    qtd = data.get("qtd")
+    preco = data.get("preco")
+
+    if not all([nome, cod_bar, qtd, preco]):
+        return jsonify({"message": "Todos os campos são obrigatórios."})
+
+    cod_bar1 = str(cod_bar)
+
+    preco = float(preco)
+    if preco < 0 or preco > 99999999:
+        return jsonify({"message": "Preço inválido"})
+    if qtd < 0:
+        return jsonify({"message": "Quantidade de estoque inválida"})
+    if len(cod_bar1) != 13:
+        return jsonify({"message": "Codigo de barras inválido"})
+
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT 1 FROM PRODUTOS WHERE CODIGO_BARRAS = ?", (cod_bar1, ))
+        resposta = cur.fetchone()
+        if resposta:
+            return jsonify({"message": "Já existe um produto cadastrado com esse código de barras"}), 401
+
+        cur.execute("INSERT INTO PRODUTOS (NOME, CODIGO_BARRAS, QUANTIDADE, PRECO) VALUES (?,?,?,?)",
+                    (nome, cod_bar1, qtd, preco,))
+
+        con.commit()
+
+        return jsonify({"message": "Produto cadastrado com sucesso!"}), 200
+
+    except Exception as e:
+        print("erro ao cadastrar produto", e)
+        raise
+    finally:
+        cur.close()
+
+
+@app.route("/produtos/<int:pagina>", methods=["GET"])
+def trazer_produtos(pagina):
+    verificacao = informar_verificacao()
+    if verificacao:
+        return verificacao
+
+    cur = con.cursor()
+    try:
+        if pagina == 0:
+            cur.execute("SELECT COUNT(ID_PRODUTO) FROM PRODUTOS")
+            qtd_paginas = cur.fetchone()
+            qtd_paginas = qtd_paginas[0]
+            # print(qtd_paginas, qtd_paginas/8, qtd_paginas % 8 != 0, qtd_paginas // 8 + 1)
+            if qtd_paginas % 8 != 0:  # Se tem resto adiciona um
+                qtd_paginas = (qtd_paginas // 8) + 1
+            else:
+                qtd_paginas = qtd_paginas / 8
+
+            return jsonify({"paginas": int(qtd_paginas)})
+        inicial = pagina * 8 - 7 if pagina == 1 else pagina * 8 - 7
+        final = pagina * 8
+
+        cur.execute("SELECT * FROM PRODUTOS")
+
+    except Exception as e:
+        print("erro ao listar produtos")
         raise
     finally:
         cur.close()
